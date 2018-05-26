@@ -16,6 +16,8 @@
 
 package org.tensorflow.demo;
 
+import java.util.Locale;
+
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 import android.graphics.Canvas;
@@ -26,8 +28,10 @@ import android.graphics.Paint.Style;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.media.ImageReader.OnImageAvailableListener;
+import android.os.Bundle;
 import android.os.SystemClock;
 import android.speech.tts.TextToSpeech;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Size;
 import android.util.TypedValue;
@@ -35,10 +39,8 @@ import android.view.Display;
 import android.view.Surface;
 import android.widget.Toast;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Vector;
 import org.tensorflow.demo.OverlayView.DrawCallback;
 import org.tensorflow.demo.env.BorderedText;
@@ -51,7 +53,7 @@ import org.tensorflow.demo.R; // Explicit import needed for internal Google buil
  * An activity that uses a TensorFlowMultiBoxDetector and ObjectTracker to detect and then track
  * objects.
  */
-public class DetectorActivity extends CameraActivity implements OnImageAvailableListener {
+public class DetectorActivity extends CameraActivity implements OnImageAvailableListener, TextToSpeech.OnInitListener {
   private static final Logger LOGGER = new Logger();
 
   // Configuration values for the prepackaged multibox model.
@@ -122,6 +124,50 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
   private byte[] luminanceCopy;
 
   private BorderedText borderedText;
+  private TextToSpeech tts;
+  private int screenCenterX;
+
+  public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+
+    tts = new TextToSpeech(this, this);
+  }
+
+  @Override
+  public void onInit(int status) {
+
+    if (status == TextToSpeech.SUCCESS) {
+
+      int result = tts.setLanguage(Locale.US);
+
+      if (result == TextToSpeech.LANG_MISSING_DATA
+              || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+        Log.e("TTS", "This Language is not supported");
+      } else {
+        tts.speak("Welcome", TextToSpeech.QUEUE_FLUSH, null, "");
+      }
+
+    } else {
+      Log.e("TTS", "Initilization Failed!");
+    }
+
+    DisplayMetrics displayMetrics = new DisplayMetrics();
+    getWindowManager().getDefaultDisplay().getMetrics(displayMetrics);
+    int screenWidth = displayMetrics.widthPixels;
+    screenCenterX = screenWidth / 2;
+
+  }
+
+  @Override
+  public void onDestroy() {
+    // Don't forget to shutdown tts!
+    if (tts != null) {
+      tts.stop();
+      tts.shutdown();
+    }
+    super.onDestroy();
+  }
+
   @Override
   public void onPreviewSizeChosen(final Size size, final int rotation) {
     final float textSizePx =
@@ -315,8 +361,7 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
             final List<Classifier.Recognition> mappedRecognitions =
                 new LinkedList<Classifier.Recognition>();
-            //name of item
-            final List<String> mappedRecognitionsName = new ArrayList<String>();
+
             for (final Classifier.Recognition result : results) {
               final RectF location = result.getLocation();
               if (location != null && result.getConfidence() >= minimumConfidence) {
@@ -325,17 +370,6 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
                 cropToFrameTransform.mapRect(location);
                 result.setLocation(location);
                 mappedRecognitions.add(result);
-                mappedRecognitionsName.add(result.getTitle());
-                final TextToSpeech speaker;
-                speaker = new TextToSpeech(getApplicationContext(), new TextToSpeech.OnInitListener() {
-                  @Override
-                  public void onInit(int status) {
-                    if (status != TextToSpeech.ERROR) {
-                      speaker.setLanguage(Locale.UK);
-                    }
-                  }
-                });
-                Log.v("Item", result.getTitle());
               }
             }
 
@@ -344,6 +378,24 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
             requestRender();
             computingDetection = false;
+
+            if (!mappedRecognitions.isEmpty()) {
+              Classifier.Recognition lowest = mappedRecognitions.get(0);
+              for (final Classifier.Recognition result : mappedRecognitions) {
+                if (result.getLocation().centerX() > lowest.getLocation().centerX()) {
+                  lowest = result;
+                }
+              }
+              if(!tts.isSpeaking()) {
+                String leftOrRight = "on your right";
+                float yy = lowest.getLocation().centerY();
+                float xx = lowest.getLocation().centerX();
+                if(yy < screenCenterX) {
+                  leftOrRight = "on your left";
+                }
+                tts.speak("There is a " + lowest.getTitle() + leftOrRight, TextToSpeech.QUEUE_FLUSH, null, "");
+              }
+            }
           }
         });
   }
