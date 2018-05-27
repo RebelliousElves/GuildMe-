@@ -382,15 +382,13 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
             if (!mappedRecognitions.isEmpty()) {
               Classifier.Recognition lowest = mappedRecognitions.get(0);
               for (final Classifier.Recognition result : mappedRecognitions) {
-                if (result.getLocation().centerX() > lowest.getLocation().centerX()) {
+                if (result.getLocation().centerY() > lowest.getLocation().centerY()) {
                   lowest = result;
                 }
               }
               if(!tts.isSpeaking()) {
                 String leftOrRight = "on your right";
-                float yy = lowest.getLocation().centerY();
-                float xx = lowest.getLocation().centerX();
-                if(yy < screenCenterX) {
+                if(lowest.getLocation().centerY() > 240) {
                   leftOrRight = "on your left";
                 }
                 tts.speak("There is a " + lowest.getTitle() + leftOrRight, TextToSpeech.QUEUE_FLUSH, null, "");
