@@ -18,6 +18,9 @@ package org.tensorflow.demo;
 
 import java.util.Locale;
 
+import android.content.Context;
+import android.content.Intent;
+//import android.hardware.Camera;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 import android.graphics.Canvas;
@@ -27,20 +30,31 @@ import android.graphics.Paint;
 import android.graphics.Paint.Style;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.location.GpsStatus;
 import android.media.ImageReader.OnImageAvailableListener;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Size;
 import android.util.TypedValue;
 import android.view.Display;
+import android.view.Gravity;
 import android.view.Surface;
+import android.view.View;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
 import android.widget.Toast;
 import java.io.IOException;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Random;
 import java.util.Vector;
 import org.tensorflow.demo.OverlayView.DrawCallback;
 import org.tensorflow.demo.env.BorderedText;
@@ -48,6 +62,8 @@ import org.tensorflow.demo.env.ImageUtils;
 import org.tensorflow.demo.env.Logger;
 import org.tensorflow.demo.tracking.MultiBoxTracker;
 import org.tensorflow.demo.R; // Explicit import needed for internal Google builds.
+
+import static android.content.ContentValues.TAG;
 
 /**
  * An activity that uses a TensorFlowMultiBoxDetector and ObjectTracker to detect and then track
@@ -126,11 +142,32 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
   private BorderedText borderedText;
   private TextToSpeech tts;
   private int screenCenterX;
+  private SpeechRecognizer mSpeechRecognizer;
+  private Intent mRecognizerIntent;
+  private RecognitionListener mRecognitionListener;
+  private boolean beMyEyes_have_been_spoken = false;
+  private String mPreviousSpeech = "";
+  private  String whatIWillSay = "";
+  private Bundle results;
+  private List<String> mAllWords;
+  //private Camera mCamera;
+  //private CameraPreview mPreview;
+
 
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
 
     tts = new TextToSpeech(this, this);
+
+    //setContentView(R.layout.layout);
+
+    findViewById(R.id.button1).setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            beMyEyes_have_been_spoken = true;
+            tts.speak("Activating Be my eyes", TextToSpeech.QUEUE_FLUSH, null, "");
+        }
+    });
   }
 
   @Override
@@ -293,112 +330,158 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
   OverlayView trackingOverlay;
 
+
+    private void initSpeechRecognition() {
+        if (SpeechRecognizer.isRecognitionAvailable(getApplicationContext())) {
+            mSpeechRecognizer = SpeechRecognizer
+                    .createSpeechRecognizer(getApplicationContext());
+            mSpeechRecognizer.setRecognitionListener(mRecognitionListener);
+
+            mRecognizerIntent = new Intent(
+                    RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            mRecognizerIntent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE,
+                    getApplicationContext().getPackageName());
+            mRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            mRecognizerIntent
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US");
+
+            //return true;
+        } else {
+            Log.e(TAG, "Speech Recognition not available on this device.");
+            //return false;
+        }
+    }
   @Override
   protected void processImage() {
-    ++timestamp;
-    final long currTimestamp = timestamp;
-    byte[] originalLuminance = getLuminance();
-    tracker.onFrame(
-            previewWidth,
-            previewHeight,
-            getLuminanceStride(),
-            sensorOrientation,
-            originalLuminance,
-            timestamp);
-    trackingOverlay.postInvalidate();
 
-    // No mutex needed as this method is not reentrant.
-    if (computingDetection) {
+      if (beMyEyes_have_been_spoken == true)
+      {
+          Toast toast = Toast.makeText(getApplicationContext(), "Activating Be my eyes", Toast.LENGTH_LONG);
+          toast.show();
+      }
+      else{
+      ++timestamp;
+      final long currTimestamp = timestamp;
+      byte[] originalLuminance = getLuminance();
+      tracker.onFrame(
+              previewWidth,
+              previewHeight,
+              getLuminanceStride(),
+              sensorOrientation,
+              originalLuminance,
+              timestamp);
+      trackingOverlay.postInvalidate();
+
+      // No mutex needed as this method is not reentrant.
+      if (computingDetection) {
+          readyForNextImage();
+          return;
+      }
+      computingDetection = true;
+      LOGGER.i("Preparing image " + currTimestamp + " for detection in bg thread.");
+
+      rgbFrameBitmap.setPixels(getRgbBytes(), 0, previewWidth, 0, 0, previewWidth, previewHeight);
+
+      if (luminanceCopy == null) {
+          luminanceCopy = new byte[originalLuminance.length];
+      }
+      System.arraycopy(originalLuminance, 0, luminanceCopy, 0, originalLuminance.length);
       readyForNextImage();
-      return;
-    }
-    computingDetection = true;
-    LOGGER.i("Preparing image " + currTimestamp + " for detection in bg thread.");
 
-    rgbFrameBitmap.setPixels(getRgbBytes(), 0, previewWidth, 0, 0, previewWidth, previewHeight);
+      final Canvas canvas = new Canvas(croppedBitmap);
+      canvas.drawBitmap(rgbFrameBitmap, frameToCropTransform, null);
+      // For examining the actual TF input.
+      if (SAVE_PREVIEW_BITMAP) {
+          ImageUtils.saveBitmap(croppedBitmap);
+      }
 
-    if (luminanceCopy == null) {
-      luminanceCopy = new byte[originalLuminance.length];
-    }
-    System.arraycopy(originalLuminance, 0, luminanceCopy, 0, originalLuminance.length);
-    readyForNextImage();
+      runInBackground(
+              new Runnable() {
+                  @Override
+                  public void run() {
+                      LOGGER.i("Running detection on image " + currTimestamp);
+                      final long startTime = SystemClock.uptimeMillis();
+                      final List<Classifier.Recognition> results = detector.recognizeImage(croppedBitmap);
+                      lastProcessingTimeMs = SystemClock.uptimeMillis() - startTime;
 
-    final Canvas canvas = new Canvas(croppedBitmap);
-    canvas.drawBitmap(rgbFrameBitmap, frameToCropTransform, null);
-    // For examining the actual TF input.
-    if (SAVE_PREVIEW_BITMAP) {
-      ImageUtils.saveBitmap(croppedBitmap);
-    }
+                      cropCopyBitmap = Bitmap.createBitmap(croppedBitmap);
+                      final Canvas canvas = new Canvas(cropCopyBitmap);
+                      final Paint paint = new Paint();
+                      paint.setColor(Color.RED);
+                      paint.setStyle(Style.STROKE);
+                      paint.setStrokeWidth(2.0f);
 
-    runInBackground(
-            new Runnable() {
-              @Override
-              public void run() {
-                LOGGER.i("Running detection on image " + currTimestamp);
-                final long startTime = SystemClock.uptimeMillis();
-                final List<Classifier.Recognition> results = detector.recognizeImage(croppedBitmap);
-                lastProcessingTimeMs = SystemClock.uptimeMillis() - startTime;
+                      float minimumConfidence = MINIMUM_CONFIDENCE_TF_OD_API;
+                      switch (MODE) {
+                          case TF_OD_API:
+                              minimumConfidence = MINIMUM_CONFIDENCE_TF_OD_API;
+                              break;
+                          case MULTIBOX:
+                              minimumConfidence = MINIMUM_CONFIDENCE_MULTIBOX;
+                              break;
+                          case YOLO:
+                              minimumConfidence = MINIMUM_CONFIDENCE_YOLO;
+                              break;
+                      }
 
-                cropCopyBitmap = Bitmap.createBitmap(croppedBitmap);
-                final Canvas canvas = new Canvas(cropCopyBitmap);
-                final Paint paint = new Paint();
-                paint.setColor(Color.RED);
-                paint.setStyle(Style.STROKE);
-                paint.setStrokeWidth(2.0f);
+                       List<Classifier.Recognition> mappedRecognitions =
+                              new LinkedList<Classifier.Recognition>();
 
-                float minimumConfidence = MINIMUM_CONFIDENCE_TF_OD_API;
-                switch (MODE) {
-                  case TF_OD_API:
-                    minimumConfidence = MINIMUM_CONFIDENCE_TF_OD_API;
-                    break;
-                  case MULTIBOX:
-                    minimumConfidence = MINIMUM_CONFIDENCE_MULTIBOX;
-                    break;
-                  case YOLO:
-                    minimumConfidence = MINIMUM_CONFIDENCE_YOLO;
-                    break;
-                }
+                      for (final Classifier.Recognition result : results) {
+                          final RectF location = result.getLocation();
+                          if (location != null && result.getConfidence() >= minimumConfidence) {
+                              canvas.drawRect(location, paint);
 
-                final List<Classifier.Recognition> mappedRecognitions =
-                        new LinkedList<Classifier.Recognition>();
+                              cropToFrameTransform.mapRect(location);
+                              result.setLocation(location);
+                              mappedRecognitions.add(result);
+                          }
+                      }
 
-                for (final Classifier.Recognition result : results) {
-                  final RectF location = result.getLocation();
-                  if (location != null && result.getConfidence() >= minimumConfidence) {
-                    canvas.drawRect(location, paint);
+                      tracker.trackResults(mappedRecognitions, luminanceCopy, currTimestamp);
+                      trackingOverlay.postInvalidate();
 
-                    cropToFrameTransform.mapRect(location);
-                    result.setLocation(location);
-                    mappedRecognitions.add(result);
+                      requestRender();
+                      computingDetection = false;
+
+                      if (!mappedRecognitions.isEmpty()) {
+                          Classifier.Recognition lowest = mappedRecognitions.get(0);
+                          for (final Classifier.Recognition result : mappedRecognitions) {
+                              if (result.getLocation().centerY() > lowest.getLocation().centerY()) {
+                                  lowest = result;
+                              }
+                          }
+
+                          if (!tts.isSpeaking()) {
+                              String leftOrRight = "on your right less than 2 meters away from you";
+
+                              //CHANGE CHOSEN LOCATION HERE//////////////
+                              if (lowest.getLocation().centerY() > 240) {
+                                  leftOrRight = "on your left less than 3 meters away from you";
+                              }
+                              ///////////////////////////////////////////
+                              whatIWillSay = "There is a " + lowest.getTitle() + " " + leftOrRight;
+                              if (!(whatIWillSay.equals(mPreviousSpeech))) {
+                                  mPreviousSpeech = whatIWillSay;
+                                  Toast toast = Toast.makeText(getApplicationContext(), "There is a " + lowest.getTitle() + " " + leftOrRight, Toast.LENGTH_SHORT);
+                                  //Toast toast = Toast.makeText(getApplicationContext(), "whatIWillSay is: " + whatIWillSay +  Integer.toString(whatIWillSay.length())+" " + "mPreviousSpeech is: " + mPreviousSpeech + Integer.toString(mPreviousSpeech.length()), Toast.LENGTH_SHORT);
+
+                                  toast.show();
+                                  tts.speak("There is a " + lowest.getTitle() + " " + leftOrRight, tts.QUEUE_FLUSH, null, "");
+                                 // mappedRecognitions.clear();
+                              }
+
+                          }
+                      }
                   }
-                }
+              });
 
-                tracker.trackResults(mappedRecognitions, luminanceCopy, currTimestamp);
-                trackingOverlay.postInvalidate();
-
-                requestRender();
-                computingDetection = false;
-
-                if (!mappedRecognitions.isEmpty()) {
-                  Classifier.Recognition lowest = mappedRecognitions.get(0);
-                  for (final Classifier.Recognition result : mappedRecognitions) {
-                    if (result.getLocation().centerY() > lowest.getLocation().centerY()) {
-                      lowest = result;
-                    }
-                  }
-                  if(!tts.isSpeaking()) {
-                    String leftOrRight = "on your right";
-                    if(lowest.getLocation().centerY() > 240) {
-                      leftOrRight = "on your left";
-                    }
-                    Toast toast = Toast.makeText(getApplicationContext(), "There is a " + lowest.getTitle() + " "+ leftOrRight, Toast.LENGTH_LONG);
-                    toast.show();
-                    tts.speak("There is a " + lowest.getTitle() +" "+ leftOrRight, TextToSpeech.QUEUE_FLUSH, null, "");
-
-                  }
-                }
-              }
-            });
+      //Create our Preview view and set it as the content of our activity.
+      //mPreview = new CameraPreview(this, mCamera);
+      //FrameLayout preview = (FrameLayout) findViewById(R.id.camera_preview);
+      //preview.addView(mPreview);
+  }
   }
 
   @Override
@@ -415,4 +498,18 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
   public void onSetDebug(final boolean debug) {
     detector.enableStatLogging(debug);
   }
+
+  /** A safe way to get an instance of the Camera object. */
+  /*public static Camera getCameraInstance(){
+    android.hardware.Camera c = null;
+    try {
+      c =   android.hardware.Camera.open();// attempt to get a Camera instance
+    }
+    catch (Exception e){
+      // Camera is not available (in use or does not exist)
+    }
+    return c; // returns null if camera is unavailable
+  }*/
+
+
 }
